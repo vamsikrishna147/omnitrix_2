@@ -466,6 +466,19 @@
         .notification.error { background-color: var(--danger); }
         @keyframes slideUp { from { transform: translateY(20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
     
+        
+        /* Tree View Styles */
+        .tree-list { list-style: none; padding: 0; margin: 0; }
+        .tree-list .tree-list { padding-left: 12px; }
+        .tree-item { display: flex; align-items: center; padding: 4px 8px; cursor: pointer; color: var(--text-secondary); border-radius: var(--radius-sm); user-select: none; font-size: 13px; }
+        .tree-item:hover { background-color: var(--bg-surface-hover); color: var(--text-primary); }
+        .tree-item.active { background-color: rgba(59, 130, 246, 0.1); color: var(--accent); }
+        .tree-icon { width: 14px; height: 14px; margin-right: 6px; flex-shrink: 0; }
+        .tree-item-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .tree-caret { width: 12px; height: 12px; margin-right: 4px; transition: transform 0.2s; opacity: 0.6; }
+        .tree-caret.open { transform: rotate(90deg); }
+        .tree-caret.hidden { opacity: 0; }
+
         /* CodeMirror overrides */
         .CodeMirror { flex: 1; height: 100%; font-family: var(--font-mono); font-size: 14px; background-color: transparent !important; }
         .CodeMirror-gutters { background-color: var(--bg-base) !important; border-right: 1px solid var(--border) !important; }
@@ -489,7 +502,12 @@
                 Code Genie
             </h1>
             <div class="header-actions">
-                <button class="btn btn-outline" id="importLocalBtn">
+                
+                <button class="btn btn-outline" id="openFolderBtn" title="Open Local Folder">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                    Open Folder
+                </button>
+<button class="btn btn-outline" id="importLocalBtn">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:6px;"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
                     Import
                 </button>
@@ -530,9 +548,9 @@
             <aside class="sidebar">
                 <h3>Explorer</h3>
                 <ul class="file-list" id="fileList"></ul>
-                <div class="new-file-section">
-                    <input type="text" class="new-file-input" id="newFileName" placeholder="New file name...">
-                    <button class="btn btn-secondary" style="width: 100%;">Create File</button>
+                <div class="new-file-section" style="display:flex; gap:8px;">
+                    <button class="btn btn-secondary" id="newFileBtn" style="flex:1;">+ File</button>
+                    <button class="btn btn-secondary" id="newFolderBtn" style="flex:1;">+ Folder</button>
                 </div>
             </aside>
 
@@ -691,8 +709,292 @@
         const sendAiBtn = document.getElementById('sendAiBtn');
         const closeChatBtn = document.getElementById('closeChatBtn');
 
+        
+        let workspaceMode = 'localstorage';
+        let rootDirHandle = null;
+        let fileSystemTree = [];
+        let openFolders = new Set(); 
+
         function saveFilesToLocalStorage() {
             localStorage.setItem('codeEditorFiles', JSON.stringify(files));
+        }
+        
+        async function openLocalFolder() {
+            try {
+                rootDirHandle = await window.showDirectoryPicker();
+                workspaceMode = 'filesystem';
+                showNotification(`Opened ${rootDirHandle.name}`, 'success');
+                openFolders.clear();
+                await refreshFileTree();
+            } catch (err) {
+                if (err.name !== 'AbortError') showNotification(err.message, 'error');
+            }
+        }
+
+        async function refreshFileTree() {
+            if (workspaceMode === 'filesystem') {
+                fileSystemTree = await readDirRecursively(rootDirHandle, '');
+                renderFileTree(fileSystemTree, fileList, '');
+            } else {
+                const tree = buildVirtualTree(files);
+                renderFileTree(tree, fileList, '');
+            }
+        }
+
+        async function readDirRecursively(dirHandle, path) {
+            const entries = [];
+            for await (const entry of dirHandle.values()) {
+                if (entry.name === 'node_modules' || entry.name === '.git') continue;
+                if (entry.kind === 'file') {
+                    entries.push({ type: 'file', name: entry.name, path: path + entry.name, handle: entry });
+                } else if (entry.kind === 'directory') {
+                    const dirPath = path + entry.name + '/';
+                    let children = [];
+                    if (openFolders.has(dirPath)) {
+                        children = await readDirRecursively(entry, dirPath);
+                    }
+                    entries.push({ type: 'folder', name: entry.name, path: dirPath, handle: entry, children });
+                }
+            }
+            return entries.sort((a, b) => {
+                if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+                return a.name.localeCompare(b.name);
+            });
+        }
+
+        function buildVirtualTree(filesObj) {
+            const root = { type: 'folder', name: 'root', path: '', children: [] };
+            for (const path in filesObj) {
+                const parts = path.split('/');
+                let current = root;
+                let currentPath = '';
+                for (let i = 0; i < parts.length; i++) {
+                    const part = parts[i];
+                    currentPath += part + (i === parts.length - 1 ? '' : '/');
+                    if (i === parts.length - 1) {
+                        current.children.push({ type: 'file', name: part, path: currentPath });
+                    } else {
+                        let folder = current.children.find(c => c.name === part && c.type === 'folder');
+                        if (!folder) {
+                            folder = { type: 'folder', name: part, path: currentPath, children: [] };
+                            current.children.push(folder);
+                        }
+                        current = folder;
+                    }
+                }
+            }
+            function sortNode(node) {
+                if (node.children) {
+                    node.children.sort((a, b) => {
+                        if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+                        return a.name.localeCompare(b.name);
+                    });
+                    node.children.forEach(sortNode);
+                }
+            }
+            sortNode(root);
+            return root.children;
+        }
+
+        function renderFileTree(nodes, container, currentPath) {
+            container.innerHTML = '';
+            container.className = 'tree-list';
+            nodes.forEach(node => {
+                const li = document.createElement('li');
+                const itemDiv = document.createElement('div');
+                itemDiv.className = 'tree-item' + (node.path === currentFile ? ' active' : '');
+                
+                if (node.type === 'folder') {
+                    const isOpen = openFolders.has(node.path);
+                    itemDiv.innerHTML = `
+                        <svg class="tree-caret ${isOpen ? 'open' : ''}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                        <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                        <span class="tree-item-name">${node.name}</span>
+                    `;
+                    itemDiv.addEventListener('click', () => {
+                        if (isOpen) openFolders.delete(node.path);
+                        else openFolders.add(node.path);
+                        refreshFileTree();
+                    });
+                    li.appendChild(itemDiv);
+                    
+                    if (isOpen) {
+                        const childUl = document.createElement('ul');
+                        renderFileTree(node.children || [], childUl, node.path);
+                        li.appendChild(childUl);
+                    }
+                } else {
+                    itemDiv.innerHTML = `
+                        <svg class="tree-caret hidden" viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                        <svg class="tree-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg>
+                        <span class="tree-item-name">${node.name}</span>
+                        <button class="delete-btn" title="Delete" style="margin-left:auto; background:none; border:none; color:var(--text-secondary); cursor:pointer;">
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>
+                        </button>
+                    `;
+                    itemDiv.addEventListener('click', (e) => {
+                        if (e.target.closest('.delete-btn')) return;
+                        loadFile(node.path, node.handle);
+                    });
+                    
+                    const delBtn = itemDiv.querySelector('.delete-btn');
+                    delBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteFile(node.path, node.handle); });
+                    
+                    li.appendChild(itemDiv);
+                }
+                container.appendChild(li);
+            });
+        }
+
+        async function getHandleByPath(dirHandle, path) {
+            const parts = path.split('/');
+            let current = dirHandle;
+            for (let i = 0; i < parts.length; i++) {
+                if (i === parts.length - 1) {
+                    return await current.getFileHandle(parts[i]);
+                } else {
+                    current = await current.getDirectoryHandle(parts[i]);
+                }
+            }
+            return null;
+        }
+
+        async function loadFile(filePath, handle = null) {
+            if (currentFile && currentFile !== filePath) await saveFile(currentFile, true);
+            currentFile = filePath;
+            let content = '';
+            let language = 'javascript';
+            const ext = filePath.split('.').pop().toLowerCase();
+            const langMap = { 'js': 'javascript', 'py': 'python', 'html': 'html', 'css': 'css', 'json': 'json', 'sql': 'sql', 'c': 'c', 'cpp': 'cpp', 'java': 'java' };
+            language = langMap[ext] || 'javascript';
+
+            if (workspaceMode === 'filesystem' && handle) {
+                const fileData = await handle.getFile();
+                content = await fileData.text();
+            } else if (files[filePath]) {
+                content = files[filePath].content;
+            }
+
+            if (typeof cmEditor !== 'undefined') {
+                cmEditor.setValue(content);
+                let mode = language;
+                if (mode === 'html') mode = 'htmlmixed';
+                cmEditor.setOption('mode', mode);
+            } else {
+                codeEditor.value = content;
+            }
+            document.getElementById('languageSelect').value = language;
+            document.getElementById('currentFileName').textContent = filePath;
+            updateStats();
+            refreshFileTree();
+        }
+
+        async function saveFile(filePath = currentFile, silent = false) {
+            if (!filePath) return;
+            const content = typeof cmEditor !== 'undefined' ? cmEditor.getValue() : codeEditor.value;
+            const language = document.getElementById('languageSelect').value;
+            
+            if (workspaceMode === 'filesystem') {
+                try {
+                    let handle = await getHandleByPath(rootDirHandle, filePath);
+                    if (handle) {
+                        const writable = await handle.createWritable();
+                        await writable.write(content);
+                        await writable.close();
+                        if (!silent) showNotification(`Saved ${filePath} to disk`, 'success');
+                    }
+                } catch (e) {
+                    if (!silent) showNotification(`Failed to save: ${e.message}`, 'error');
+                }
+            } else {
+                files[filePath] = { content, language };
+                saveFilesToLocalStorage();
+                if (!silent) showNotification(`Saved ${filePath} locally`, 'success');
+            }
+        }
+
+        async function createNewItem(isFolder) {
+            const name = prompt(`Enter new ${isFolder ? 'folder' : 'file'} name (can include path like src/app.js):`);
+            if (!name) return;
+            
+            if (workspaceMode === 'filesystem') {
+                try {
+                    const parts = name.split('/');
+                    let current = rootDirHandle;
+                    let currentPath = '';
+                    for (let i = 0; i < parts.length; i++) {
+                        currentPath += parts[i] + (i === parts.length - 1 ? (isFolder ? '/' : '') : '/');
+                        if (i === parts.length - 1) {
+                            if (isFolder) {
+                                await current.getDirectoryHandle(parts[i], { create: true });
+                            } else {
+                                await current.getFileHandle(parts[i], { create: true });
+                            }
+                        } else {
+                            current = await current.getDirectoryHandle(parts[i], { create: true });
+                            openFolders.add(currentPath);
+                        }
+                    }
+                    await refreshFileTree();
+                    if (!isFolder) loadFile(name);
+                } catch (e) {
+                    showNotification(`Error creating: ${e.message}`, 'error');
+                }
+            } else {
+                if (isFolder) {
+                    const dummyPath = name + '/.keep';
+                    files[dummyPath] = { content: '// Keep folder', language: 'javascript' };
+                    openFolders.add(name + '/');
+                    saveFilesToLocalStorage();
+                    refreshFileTree();
+                } else {
+                    const ext = name.split('.').pop().toLowerCase();
+                    const langMap = { 'js': 'javascript', 'py': 'python', 'html': 'html', 'css': 'css', 'json': 'json' };
+                    files[name] = { content: `// New file: ${name}`, language: langMap[ext] || 'javascript' };
+                    saveFilesToLocalStorage();
+                    const parts = name.split('/');
+                    let p = '';
+                    for(let i=0; i<parts.length-1; i++){
+                        p += parts[i] + '/';
+                        openFolders.add(p);
+                    }
+                    await refreshFileTree();
+                    loadFile(name);
+                }
+            }
+        }
+
+        async function deleteFile(filePath, handle = null) {
+            if (!confirm(`Delete ${filePath}?`)) return;
+            
+            if (workspaceMode === 'filesystem') {
+                try {
+                    const parts = filePath.split('/');
+                    const name = parts.pop();
+                    let current = rootDirHandle;
+                    for (const part of parts) {
+                        current = await current.getDirectoryHandle(part);
+                    }
+                    await current.removeEntry(name);
+                    if (currentFile === filePath) {
+                        currentFile = null;
+                        if(typeof cmEditor!=='undefined') cmEditor.setValue('');
+                    }
+                    await refreshFileTree();
+                    showNotification(`Deleted ${filePath}`, 'success');
+                } catch (e) {
+                    showNotification(`Error deleting: ${e.message}`, 'error');
+                }
+            } else {
+                delete files[filePath];
+                saveFilesToLocalStorage();
+                if (currentFile === filePath) {
+                    const remaining = Object.keys(files);
+                    if (remaining.length > 0) loadFile(remaining[0]);
+                    else { currentFile = null; if(typeof cmEditor!=='undefined') cmEditor.setValue(''); }
+                }
+                refreshFileTree();
+            }
         }
 
         function updateStats() {
@@ -703,23 +1005,12 @@
             document.getElementById('charCount').textContent = chars;
         }
 
-        function renderLineNumbers() { return; // Handled by CodeMirror
-
-            if (!gutter) return;
-            const content = codeEditor.value || '';
-            const lines = content.split('\n').length;
-            let html = '';
-            for (let i = 1; i <= lines; i++) {
-                html += `<span class="line-number">${i}</span>`;
-            }
-            gutter.innerHTML = html;
-            gutter.scrollTop = codeEditor.scrollTop;
-        }
+        function renderLineNumbers() { return; }
 
         function changeLanguage() {
             const lang = document.getElementById('languageSelect').value;
             document.getElementById('currentLang').textContent = lang.charAt(0).toUpperCase() + lang.slice(1);
-            if (files[currentFile]) {
+            if (files[currentFile] && workspaceMode === 'localstorage') {
                 files[currentFile].language = lang;
                 saveFilesToLocalStorage();
             }
@@ -733,106 +1024,7 @@
             setTimeout(() => notification.remove(), 3000);
         }
 
-        function saveFile() {
-            if (!currentFile) {
-                showNotification('No file selected', 'error');
-                return;
-            }
-            files[currentFile] = {
-                content: codeEditor.value,
-                language: document.getElementById('languageSelect').value
-            };
-            saveFilesToLocalStorage();
-            showNotification(`Saved ${currentFile} locally`, 'success');
-        }
-
-        function createNewFile() {
-            const fileName = document.getElementById('newFileName').value.trim();
-            if (!fileName) {
-                showNotification('Please enter a filename', 'error');
-                return;
-            }
-            if (files[fileName]) {
-                showNotification('File already exists', 'error');
-                return;
-            }
-            const ext = fileName.split('.').pop().toLowerCase();
-            const langMap = { 'js': 'javascript', 'py': 'python', 'html': 'html', 'css': 'css', 'json': 'json', 'sql': 'sql', 'c': 'c', 'cpp': 'cpp', 'java': 'java' };
-            const detectedLang = langMap[ext] || 'javascript';
-            files[fileName] = { content: `// New file: ${fileName}`, language: detectedLang };
-            saveFilesToLocalStorage();
-            renderFileList();
-            loadFile(fileName, detectedLang);
-            document.getElementById('newFileName').value = '';
-            showNotification(`Created ${fileName}`, 'success');
-        }
-
-        function loadFile(fileName, language) {
-            if (currentFile && files[currentFile]) {
-                files[currentFile].content = codeEditor.value;
-            }
-            currentFile = fileName;
-            const fileData = files[fileName];
-            if (fileData) {
-                if (typeof cmEditor !== 'undefined') {
-                    cmEditor.setValue(fileData.content);
-                    let mode = fileData.language;
-                    if (mode === 'html') mode = 'htmlmixed';
-                    cmEditor.setOption('mode', mode);
-                } else {
-                    codeEditor.value = fileData.content;
-                }
-                document.getElementById('languageSelect').value = fileData.language;
-                document.getElementById('currentFileName').textContent = fileName;
-                document.getElementById('currentLang').textContent = fileData.language.charAt(0).toUpperCase() + fileData.language.slice(1);
-                updateStats();
-                renderLineNumbers();
-            }
-            document.querySelectorAll('.file-item').forEach(item => item.classList.remove('active'));
-            const found = document.querySelector(`.file-item[data-filename="${fileName}"]`);
-            if (found) found.classList.add('active');
-        }
-
-        function deleteFile(fileName) {
-            if (confirm(`Delete ${fileName}?`)) {
-                delete files[fileName];
-                saveFilesToLocalStorage();
-                if (currentFile === fileName) {
-                    const remaining = Object.keys(files);
-                    if (remaining.length > 0) {
-                        loadFile(remaining[0], files[remaining[0]].language);
-                    } else {
-                        codeEditor.value = '';
-                        currentFile = null;
-                        document.getElementById('currentFileName').textContent = '';
-                    }
-                }
-                renderFileList();
-                showNotification(`Deleted ${fileName}`, 'success');
-            }
-        }
-
-        function renderFileList() {
-            fileList.innerHTML = '';
-            for (const fileName in files) {
-                const li = document.createElement('li');
-                li.className = 'file-item' + (fileName === currentFile ? ' active' : '');
-                li.dataset.filename = fileName;
-                const nameSpan = document.createElement('span');
-                nameSpan.textContent = fileName;
-                nameSpan.addEventListener('click', () => loadFile(fileName, files[fileName].language));
-                const deleteBtn = document.createElement('button');
-                deleteBtn.className = 'delete-btn';
-                deleteBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>';
-                deleteBtn.title = 'Delete File';
-                deleteBtn.addEventListener('click', (e) => { e.stopPropagation(); deleteFile(fileName); });
-                li.appendChild(nameSpan);
-                li.appendChild(deleteBtn);
-                fileList.appendChild(li);
-            }
-        }
-
-        async function autofixError(code, errorMessage) {
+async function autofixError(code, errorMessage) {
             const prompt = `The following JavaScript code produced an error. Explain the error and provide the corrected code.
             \n--- CODE ---\n${code}
             \n--- ERROR ---\n${errorMessage}
@@ -1052,8 +1244,8 @@
                 thinking.remove();
                 appendChat('assistant', reply);
             });
-            document.querySelector('.new-file-section button').addEventListener('click', createNewFile);
-            document.getElementById('newFileName').addEventListener('keydown', (e) => { if (e.key === 'Enter') createNewFile(); });
+            
+            
             document.querySelector('#compileModal .btn-outline').addEventListener('click', () => document.getElementById('compileModal').classList.remove('active'));
             document.getElementById('localFileInput').addEventListener('change', handleLocalFileSelect);
             document.getElementById('languageSelect').addEventListener('change', changeLanguage);
@@ -1061,7 +1253,17 @@
             codeEditor.addEventListener('scroll', () => { if (gutter) gutter.scrollTop = codeEditor.scrollTop; });
             document.addEventListener('keydown', (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); saveFile(); } });
 
-            renderFileList();
+            
+            const newFileBtn = document.getElementById('newFileBtn');
+            if (newFileBtn) newFileBtn.addEventListener('click', () => createNewItem(false));
+            
+            const newFolderBtn = document.getElementById('newFolderBtn');
+            if (newFolderBtn) newFolderBtn.addEventListener('click', () => createNewItem(true));
+            
+            const openFolderBtn = document.getElementById('openFolderBtn');
+            if (openFolderBtn) openFolderBtn.addEventListener('click', openLocalFolder);
+
+            refreshFileTree();
             if (currentFile && files[currentFile]) {
                 loadFile(currentFile, files[currentFile].language);
             }
@@ -1082,7 +1284,7 @@
                 const langMap = { 'js': 'javascript', 'py': 'python', 'html': 'html', 'css': 'css', 'json': 'json', 'sql': 'sql', 'c': 'c', 'cpp': 'cpp', 'java': 'java' };
                 files[filename] = { content, language: langMap[lang] || 'javascript' };
                 saveFilesToLocalStorage();
-                renderFileList();
+                refreshFileTree();
                 loadFile(filename, files[filename].language);
                 showNotification(`Imported ${filename}`, 'success');
                 localFileInput.value = '';
