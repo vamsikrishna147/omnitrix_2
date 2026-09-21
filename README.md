@@ -13,25 +13,6 @@ Since this is a client-side web application, you don't need to install any serve
 
 Since Code-Genie is a static site (HTML/CSS/JS only), you can host it for free on many platforms.
 
-### Option 1: Netlify (Easiest - Drag & Drop)
-1.  Go to [Netlify Drop](https://app.netlify.com/drop).
-2.  Drag the **folder** containing `index.html` into the dashed box.
-3.  Netlify will upload it and give you a live URL (e.g., `https://peaceful-name-12345.netlify.app`).
-4.  You can share this link with anyone!
-
-### Option 2: GitHub Pages (Best for Version Control)
-1.  Create a new repository on [GitHub](https://github.com/new).
-2.  Upload the `index.html` file to the repository.
-3.  Go to **Settings** > **Pages**.
-4.  Under **Source**, select `main` (or `master`) branch.
-5.  Click **Save**. GitHub will generate a link for you (e.g., `https://yourusername.github.io/repo-name`).
-
-### Option 3: Vercel
-1.  Install Vercel CLI: `npm i -g vercel` (requires Node.js).
-2.  Run `vercel` in the project folder.
-3.  Follow the prompts to deploy instantly.
-
-## 🔑 Setup API Keys
 
 To use the AI features (Gemini) and Code Execution (Judge0), you need to configure your API keys.
 
